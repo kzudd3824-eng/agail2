@@ -14,3 +14,7 @@
 # Python
 __pycache__/
 .ipynb_checkpoints/
+
+# 実験のシリアルログは残す（LaTeX の *.log とは別扱い）
+!ppm/data/**/*.log
+!ppm/data/*.log
