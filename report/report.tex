@@ -1,0 +1,333 @@
+% アジャイル2 実験報告書（骨組み）
+% 計画書 plan/25G1066.tex をもとに作成．【TODO】の箇所を埋めていく．
+% コンパイル方法 (upLaTeX + dvipdfmx):
+%   uplatex report.tex && uplatex report.tex && dvipdfmx report.dvi
+\documentclass[a4paper,11pt,uplatex,dvipdfmx]{jsarticle}
+\usepackage[margin=25mm]{geometry}
+\usepackage{url}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{listings}
+\usepackage[most]{tcolorbox}
+
+\setlist[itemize]{itemsep=0.6em, topsep=0.4em}
+\lstset{basicstyle=\ttfamily\small, frame=single, breaklines=true, columns=fullflexible}
+
+% 未記入箇所の目印．提出前に grep "todo" で残りがないか確認する
+\newcommand{\todo}[1]{\textcolor{red}{\textbf{【TODO：#1】}}}
+
+\begin{document}
+
+\noindent{\Large\bfseries アジャイル2 実験報告書}\\[0.4em]
+{\large ニューラルネットワーク重みデータの疎行列圧縮によるArduino上での推論}\\[0.4em]
+25G1066\quad 塩野一樹\\
+提出日：\todo{提出日}
+\bigskip
+
+% =====================================================================
+\section{実験の目的}
+% 計画書の内容をそのまま引き継ぎ．必要に応じて推敲する
+LEDとフォトトランジスタを用いた色の検知実験では，ハードウェア的に解決できない問題をいくつも抱えている．
+例として，そのまま読み取ると外光の影響で正しい色を検知できないことがある．
+その対策としてこれまでキャリブレーションを行ったり，ニューラルネットを用いて読取データが入力データに近づくように推論して補正を行ったりしたが，このような方法を用いても完全に正しい色を検知することはできない．
+また，ニューラルネットワークの隠れ層の次元数を増やせば精度は上がるが，Arduinoの実行メモリの限界に達してしまうため，隠れ層の次元数を増やすことは難しい．
+そこで，本実験ではニューラルネットワークの隠れ層の次元数を増やすことを目的として，Arduinoの実行メモリの限界を超えないよう疎行列の圧縮を行うことでArduinoの実行メモリの使用量を減らす．
+
+\todo{第2・3週の結果（キャリブレーションなし約10{,}900，ありで約2{,}900--4{,}800，NN補正ありで約1{,}700）を背景として数値で示すと説得力が増す}
+
+% =====================================================================
+\section{実験の理論}
+\subsection{疎行列とその格納形式}
+疎行列とは，成分の大半が0で占められている行列である．
+疎行列を圧縮するためにはゼロ成分を保存せず，非ゼロ成分の位置と値だけを保存することでメモリ使用量を減らすことができる．
+非ゼロ成分の位置と値を保存する方法として，COO（Coordinate）形式やCSR（Compressed Sparse Row）形式，LIL（List of Lists）形式などが存在している．
+以下では，3行4列の行列
+\begin{equation}
+  A =
+  \begin{pmatrix}
+    5 & 0 & 0 & 2 \\
+    0 & 0 & 0 & 0 \\
+    0 & 3 & 0 & 1
+  \end{pmatrix}
+\end{equation}
+を例に，それぞれの圧縮方法について説明し，メリット・デメリットを比較する．
+なお，行番号・列番号は0から数える．
+
+\subsubsection{COO（Coordinate）形式}
+COO形式とは，非ゼロ成分ごとに行番号・列番号・値の3つ組を並べて保存する形式である．
+行列$A$の場合表\ref{tab:coo}のようになる．
+
+\begin{table}[H]
+  \centering
+  \caption{COO形式による$A$の表現}
+  \label{tab:coo}
+  \begin{tabular}{lcccc}
+    \toprule
+    要素の番号 $k$ & 0 & 1 & 2 & 3 \\
+    \midrule
+    \texttt{row} & 0 & 0 & 2 & 2 \\
+    \texttt{col} & 0 & 3 & 1 & 3 \\
+    \texttt{val} & 5 & 2 & 3 & 1 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+構造が単純で作りやすく理解しやすい一方で，非ゼロ成分1個あたりに行番号と列番号の2つを保存する必要があるためデータ量が大きくなりやすい．
+
+\subsubsection{CSR（Compressed Sparse Row）形式}
+CSR形式とは，非ゼロ成分の値と列番号を行の順に並べ，各行の非ゼロ要素の開始位置を示す配列\texttt{row\_ptr}を別に持つ形式である．
+行列$A$の場合次のようになる．
+\begin{align*}
+  \texttt{val}     &= [\,5,\ 2,\ 3,\ 1\,] \\
+  \texttt{col}     &= [\,0,\ 3,\ 1,\ 3\,] \\
+  \texttt{row\_ptr} &= [\,0,\ 2,\ 2,\ 4\,]
+\end{align*}
+行$i$の非ゼロ成分は\texttt{val}と\texttt{col}の\texttt{row\_ptr[$i$]}番目から\texttt{row\_ptr[$i+1$]}$-1$番目までに格納されている．
+非ゼロ成分ごとに行番号を持たないため，データ量は小さくなりやすい．
+また，CSR形式は行ごとに積和を計算する処理に適しており，全結合層$y_i = b_i + \sum_j W_{ij} x_j$の計算にそのまま使える．
+
+\subsubsection{LIL（List of Lists）形式}
+LIL形式とは，行ごとに非ゼロ成分の列番号のリストと値のリストを持つ形式である\cite{SciPy}．
+行列$A$の場合表\ref{tab:lil}のようになる．
+
+\begin{table}[H]
+  \centering
+  \caption{LIL形式による$A$の表現}
+  \label{tab:lil}
+  \begin{tabular}{lcc}
+    \toprule
+    行 & 列番号のリスト & 値のリスト \\
+    \midrule
+    0 & [0, 3] & [5, 2] \\
+    1 & [\,]   & [\,]   \\
+    2 & [1, 3] & [3, 1] \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+要素の追加や削除がしやすく，疎行列を少しずつ組み立てるのに適する一方，行列ベクトル積などの演算は遅い．
+
+\subsection{格納形式の比較と選択}
+表\ref{tab:compare}に3形式の比較を示す．
+
+\begin{table}[H]
+  \centering
+  \caption{COO・CSR・LIL形式の比較}
+  \label{tab:compare}
+  \small
+  \begin{tabular}{p{0.08\linewidth}p{0.26\linewidth}p{0.24\linewidth}p{0.24\linewidth}}
+    \toprule
+    形式 & 位置情報の持ち方 & 長所 & 短所 \\
+    \midrule
+    COO & 非ゼロごとに(行, 列) & 単純で作りやすい & サイズが大きい \\
+    CSR & 列番号と行の開始位置 & 小さくて行方向の演算が速い & 要素の追加が難しい \\
+    LIL & 行ごとのリスト & 組み立て・変更が容易 & 演算が遅く，行ごとの管理領域が必要 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+ニューラルネットワークの重みは学習後に一度だけ書き出す固定データであり，実行中に要素を追加・削除する必要がない．
+また，推論では行ごとの積和を計算する．
+したがって，サイズが小さく行方向の演算に適したCSR形式を用いる．
+
+\subsection{L1正則化による重みの疎化}
+\todo{配布された学習プログラムの損失関数 $L = \mathrm{MSE} + \lambda \sum |w|$（$\lambda = 10^{-6}$）を式で示し，L1正則化により0に近い重みが多くなる理由を説明する}
+
+\subsection{メモリ使用量の理論値}
+隠れ層の次元を$H$，各層の重みの非ゼロ成分数の合計を$N$とする．
+\texttt{float}を4バイト，\texttt{uint8\_t}を1バイト，\texttt{uint16\_t}を2バイトとすると，重み配列のメモリ使用量は次のようになる．
+\begin{align}
+  M_{\mathrm{dense}}(H) &= 4\,(3H + H^2 + 3H) = 4H^2 + 24H \ \text{[byte]} \\
+  M_{\mathrm{CSR}}(H, N) &= \underbrace{4N}_{\texttt{val}} + \underbrace{1 \cdot N}_{\texttt{col}}
+     + \underbrace{2\,\{(H+1) + (H+1) + (3+1)\}}_{\texttt{row\_ptr}} = 5N + 4H + 12 \ \text{[byte]}
+\end{align}
+バイアス$4(2H+3)$バイトはどちらの方式でも共通である．
+CSR形式の方が小さくなる条件は$5N + 4H + 12 < 4H^2 + 24H$であり，\todo{$H=40$のときに$N$が何個以下なら得か，などを計算して示す}
+
+% =====================================================================
+\section{実験方法}
+\subsection{実験環境}
+\begin{itemize}
+  \item マイコン：Arduino UNO R4 WiFi \todo{SRAM・フラッシュの容量を記載}
+  \item センサ：RGBフルカラーLED（OSTA5131A），照度センサ（NJL7302L-F3）
+  \item 学習環境：Python，PyTorch \todo{バージョン}，Visual Studio Code
+  \item 読み取り条件：2ボタン（白黒キャリブレーションあり），\texttt{RgbFlashDelay} $=100$\,ms \todo{実際の値を確認}
+\end{itemize}
+
+\subsection{実験の流れ}
+\begin{enumerate}
+  \item 3$\times$3および6$\times$4のカラーチャートを読み取り，学習データを作成する．
+  \item Pythonで隠れ層の次元$H$を変えながらニューラルネットワークを学習させる．
+  \item 重みのうち絶対値がしきい値$\theta$未満の成分を0とし，CSR形式に変換してArduino用のヘッダファイルとして出力する．
+  \item 圧縮なしの場合とCSR形式の場合のそれぞれでカラーチャートを読み取り，MSE・推論時間・メモリ使用量を比較する．
+\end{enumerate}
+
+\subsection{しきい値処理とCSR形式への変換}
+学習した重み行列$W$（行が出力側，列が入力側）に次のしきい値処理を行う．
+\begin{equation}
+  W'_{ij} =
+  \begin{cases}
+    W_{ij} & (|W_{ij}| \geq \theta) \\
+    0      & (|W_{ij}| < \theta)
+  \end{cases}
+\end{equation}
+しきい値処理した行列をCSR形式に変換し，ヘッダファイルに書き出す．
+値\texttt{val}は\texttt{float}，列番号\texttt{col}は\texttt{uint8\_t}，行の開始位置\texttt{row\_ptr}は\texttt{uint16\_t}とした．
+\texttt{col}を\texttt{uint8\_t}としたため，$H \leq 256$の範囲でのみ正しく動作する．
+
+\todo{実際に使った変換コード（train\_L1\_normalization.ipynb内）を貼り，説明する．計画書のコードと違う点があればその説明も}
+
+\subsection{Arduino側の推論の実装}
+CSR形式の全結合層を次の関数で実装した．
+行$i$について，\texttt{row\_ptr[$i$]}から\texttt{row\_ptr[$i+1$]}$-1$までの非ゼロ成分だけを積和するため，ゼロ成分の乗算は行われない．
+
+\begin{lstlisting}[language=C]
+void csr_layer(const float *val, const uint8_t *col, const uint16_t *row_ptr,
+               const float *bias, const float *x, float *y, int rows) {
+    for (int i = 0; i < rows; i++) {
+        float sum = bias[i];
+        for (uint16_t k = row_ptr[i]; k < row_ptr[i + 1]; k++) {
+            sum += val[k] * x[col[k]];
+        }
+        y[i] = sum;
+    }
+}
+
+void predict(float input[INPUT_SIZE], float output[OUTPUT_SIZE]) {
+    float layer1[HIDDEN_SIZE1] = {0};
+    float layer2[HIDDEN_SIZE2] = {0};
+    csr_layer(w1_val, w1_col, w1_ptr, bias_1, input, layer1, HIDDEN_SIZE1);
+    for (int i = 0; i < HIDDEN_SIZE1; i++) layer1[i] = relu(layer1[i]);
+    csr_layer(w2_val, w2_col, w2_ptr, bias_2, layer1, layer2, HIDDEN_SIZE2);
+    for (int i = 0; i < HIDDEN_SIZE2; i++) layer2[i] = relu(layer2[i]);
+    csr_layer(w3_val, w3_col, w3_ptr, bias_3, layer2, output, OUTPUT_SIZE);
+}
+\end{lstlisting}
+
+\todo{圧縮なし版のpredict()との違い，配列に const を付けた理由（フラッシュ配置）を説明}
+
+\subsection{評価方法}
+\begin{itemize}
+  \item 推論性能：読み取ったPPM画像と正解画像のMSEを，配布された評価ツール（mse\_calculator.html）で求める．
+    測定時の誤差（照明条件，紙の圧着具合，紙のずれ等）の影響を減らすため，各条件で\todo{$n$}回測定し平均と標準偏差を求める．
+  \item 評価画像：3$\times$3カラーチャート（学習にも使用）\todo{学習に使っていない評価用チャートを使った場合はその説明}
+  \item 実行速度：\texttt{predict()}の前後に\texttt{micros()}を置き，1画素あたりの推論時間を測定する．
+  \item メモリ使用量：式(3)(4)による手計算と，Arduino IDEのコンパイル結果（スケッチのフラッシュ使用量，グローバル変数のSRAM使用量）で確認する．
+\end{itemize}
+
+\subsection{実験条件}
+\begin{table}[H]
+  \centering
+  \caption{実験条件}
+  \label{tab:cond}
+  \begin{tabular}{ll}
+    \toprule
+    項目 & 設定 \\
+    \midrule
+    隠れ層の次元$H$ & 40，70，100，200 \todo{実際に行った値} \\
+    重みデータの形式 & 圧縮なし（\texttt{float}配列），CSR形式 \\
+    しきい値$\theta$ & 0.005，0.01，0.015，0.02（CSR形式のみ） \\
+    L1正則化の係数$\lambda$ & $10^{-6}$ \\
+    学習のエポック数 & 50000 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{計画書からの変更点}
+\begin{itemize}
+  \item 計画書では$H=60$としていたが，$H=70$で実験した．\todo{理由（例：計画書の段階で圧縮なしでは70次元がコンパイルエラーになると示されており，圧縮によって載るかを確認するため，など）}
+  \item 計画書では$\theta = 0.001$を含めていたが，代わりに$\theta=0.015$を追加した．\todo{理由}
+\end{itemize}
+% 資料の指示：「実装が難しかったから」ではなく第三者を納得させられる論理的な説明にすること
+
+% =====================================================================
+\section{実験結果}
+\subsection{圧縮前後のMSE}
+表\ref{tab:mse}に，各条件でのMSEを示す．
+
+\begin{table}[H]
+  \centering
+  \caption{隠れ層の次元$H$としきい値$\theta$ごとのMSE（3$\times$3チャート）}
+  \label{tab:mse}
+  \begin{tabular}{lrrrr}
+    \toprule
+    条件 & $H=40$ & $H=70$ & $H=100$ & $H=200$ \\
+    \midrule
+    圧縮なし         & \todo{} & \todo{} & \todo{} & \todo{} \\
+    CSR $\theta=0.005$ & 715.19 & 634.11 & 260.07 & 749.81 \\
+    CSR $\theta=0.01$  & 764.56 & 634.85 & 301.15 & 305.26 \\
+    CSR $\theta=0.015$ & 406.15 & 463.33 & 781.15 & 706.15 \\
+    CSR $\theta=0.02$  & 503.48 & 848.15 & 459.07 & 497.70 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+% 上の数値は mse.txt から転記した単回測定の値．平均値に差し替えること
+\todo{現状は各1回の測定値．複数回の平均$\pm$標準偏差に差し替える．グラフ化も検討}
+
+\subsection{非ゼロ成分数とメモリ使用量}
+\begin{table}[H]
+  \centering
+  \caption{各層の非ゼロ成分数と重みのメモリ使用量（$\theta=$\todo{}）}
+  \label{tab:nnz}
+  \begin{tabular}{rrrrrr}
+    \toprule
+    $H$ & 層1 & 層2 & 層3 & $M_{\mathrm{dense}}$ [B] & $M_{\mathrm{CSR}}$ [B] \\
+    \midrule
+    40  & \todo{} & \todo{} & \todo{} & 7{,}360 & \todo{} \\
+    70  & \todo{} & \todo{} & \todo{} & 21{,}280 & \todo{} \\
+    100 & \todo{} & \todo{} & \todo{} & 42{,}400 & \todo{} \\
+    200 & 51/600 & 70/40{,}000 & 20/600 & 164{,}800 & 1{,}517 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+% H=200 の行は aja2/model_parameters_csr.h（現在のヘッダ）から数えた値．どのθで出力したものか要確認
+\todo{Arduino IDEのコンパイル結果（フラッシュ・SRAM使用量）を圧縮なし／CSRで並べた表}
+
+\subsection{実行速度}
+\todo{\texttt{micros()}で測った\texttt{predict()}の実行時間（圧縮なし／CSR，各$H$）の表}
+
+\subsection{評価用画像での結果}
+\todo{学習に使っていない画像（8$\times$8の評価画像など）でのMSE．過学習していないかの確認}
+
+% =====================================================================
+\section{考察}
+\subsection{メモリ削減効果}
+\todo{式による理論値とコンパイル結果の比較．どの層の圧縮が効いたか（層2が支配的）．圧縮によって何次元まで載せられたか}
+
+\subsection{実行速度}
+\todo{非ゼロ成分だけを計算するため速くなるはず，という予想と結果の比較．間接参照（\texttt{x[col[k]]}）のオーバーヘッド}
+
+\subsection{推論性能}
+\todo{圧縮前後でMSEがどう変わったか．$H$や$\theta$とMSEの関係に傾向があるか．ばらつきが測定誤差より大きいといえるか}
+
+\subsection{測定誤差について}
+\todo{同条件での繰り返し測定のばらつき．MSEの差が圧縮によるものか測定誤差によるものかの判断}
+
+% =====================================================================
+\section{今後の課題（Future work）}
+\todo{例：重みの量子化（float→int8 / int16）との併用，しきい値を設けた後の再学習（pruning + fine-tuning），層ごとに異なるしきい値，学習データの増加，評価用チャートでの汎化性能の評価 など}
+
+% =====================================================================
+\section{まとめ}
+\todo{目的・方法・結果・結論を数行で}
+
+% =====================================================================
+% 参考文献は情報処理学会の書式に合わせる
+% https://www.ipsj.or.jp/journal/submit/ronbun_j_prms.html
+\begin{thebibliography}{9}
+\bibitem{SciPy} SciPy documentation: scipy.sparse.lil\_matrix，\url{https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.lil_matrix.html}
+\bibitem{han2016deep} Han, S., Mao, H. and Dally, W.\,J.: Deep Compression: Compressing Deep Neural Networks with Pruning, Trained Quantization and Huffman Coding, \textit{ICLR 2016} (2016).
+\bibitem{copernicus2020} Copernicus: Characterizing the Performance Implications of Compression Formats Used in Sparse Workloads, arXiv:2011.10932 (2020).
+\end{thebibliography}
+\todo{本文中で \textbackslash cite されていない文献は引用するか削除する}
+
+\appendix
+\section{ソースコード}
+\todo{Arduinoスケッチ全体（aja2/aja2.ino）と変換スクリプトを掲載．\textbackslash lstinputlisting を使うとよい}
+
+\end{document}

@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# LaTeX の中間ファイル
+*.aux
+*.log
+*.dvi
+*.out
+*.toc
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+
+# Python
+__pycache__/
+.ipynb_checkpoints/

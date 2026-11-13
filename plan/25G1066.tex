@@ -1,0 +1,239 @@
+% コンパイル方法 (upLaTeX + dvipdfmx):
+%   uplatex CE課題1.tex
+%   dvipdfmx CE課題1.dvi
+% latexmk を使う場合: latexmk -pdfdvi -latex=uplatex CE課題1.tex (要 .latexmkrc 設定)
+\documentclass[a4paper,11pt,uplatex,dvipdfmx]{jsarticle}
+\usepackage[margin=25mm]{geometry}
+\usepackage{url}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage[most]{tcolorbox}
+
+\setlist[itemize]{itemsep=0.6em, topsep=0.4em}
+\pagestyle{empty}
+
+\begin{document}
+
+\noindent{\Large\bfseries アジャイル2 実験計画書}\\[0.4em]
+25G1066\quad 塩野一樹
+\bigskip
+
+\section{実験の目的}
+LEDとフォトトランジスタを用いた色の検知実験では，ハードウェア的に解決できない問題をいくつも抱えている．
+例として，そのまま読み取ると外光の影響で正しい色を検知できないことがある．
+その対策としてこれまでキャリブレーションを行ったり，ニューラルネットを用いて読取データが入力データに近づくように推論して補正を行ったりしたが，このような方法を用いても完全に正しい色を検知することはできない．
+また，ニューラルネットワークの隠れ層の次元数を増やせば精度は上がるが，Arduinoの実行メモリの限界に達してしまうため，隠れ層の次元数を増やすことは難しい．
+そこで，本実験ではニューラルネットワークの隠れ層の次元数を増やすことを目的として，Arduinoの実行メモリの限界を超えないよう疎行列の圧縮を行うことでArduinoの実行メモリの使用量を減らす．
+
+\section{実験の理論}
+疎行列とは，成分の大半が0で占められている行列である．
+疎行列を圧縮するためにはゼロ成分を保存せず，非ゼロ成分の位置と値だけを保存することでメモリ使用量を減らすことができる．
+非ゼロ成分の位置と値を保存する方法として，COO（Coordinate）形式やCSR（Compressed Sparse Row）形式，LIL（List of Lists）形式などが存在している．
+以下では，3行4列の行列
+
+\begin{equation}
+  A =
+  \begin{pmatrix}
+    5 & 0 & 0 & 2 \\
+    0 & 0 & 0 & 0 \\
+    0 & 3 & 0 & 1
+  \end{pmatrix}
+\end{equation}
+
+を例に，CSR形式，COO形式，LIL形式のそれぞれの圧縮方法について説明し，それぞれのメリット・デメリットを比較する．
+そして，最終的にどの圧縮方式を用いるかを決定する．
+なお，行番号・列番号は0から数える．
+
+\subsubsection{COO（Coordinate）形式}
+
+COO形式とは，非ゼロ成分ごとに行番号・列番号・値の3つ組を並べて保存する形式である．
+行列$A$の場合表\ref{tab:coo}のようになる．
+
+\begin{table}[h]
+  \centering
+  \caption{COO形式による$A$の表現}
+  \label{tab:coo}
+  \begin{tabular}{lcccc}
+    \toprule
+    要素の番号 $k$ & 0 & 1 & 2 & 3 \\
+    \midrule
+    \texttt{row} & 0 & 0 & 2 & 2 \\
+    \texttt{col} & 0 & 3 & 1 & 3 \\
+    \texttt{val} & 5 & 2 & 3 & 1 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+疎行列の格納形式の中でも構造が単純で作りやすく最も理解しやすい一方で，非ゼロ成分1個あたりに行番号と列番号の2つを保存する必要があるためデータ量が大きくなりやすい特徴をもつ．
+
+\subsubsection{CSR（Compressed Sparse Row）形式}
+
+CSR形式とは，非ゼロ成分の値と列番号を行の順に並べ，各行の非ゼロ要素の開始位置を示す配列\texttt{row\_ptr}を別に持つ形式である．
+行列$A$の場合次のようになる．
+
+\begin{align*}
+  \texttt{val}     &= [\,5,\ 2,\ 3,\ 1\,] \\
+  \texttt{col}     &= [\,0,\ 3,\ 1,\ 3\,] \\
+  \texttt{row\_ptr} &= [\,0,\ 2,\ 2,\ 4\,]
+\end{align*}
+
+行$i$の非ゼロ成分は\texttt{val}と\texttt{col}の\texttt{row\_ptr[$i$]}番目から\texttt{row\_ptr[$i+1$]}$-1$番目までに格納されている．
+非ゼロ成分ごとに行番号を持たないため，データ量は小さくなりやすい特徴をもつ．
+
+また，CSR形式は行ごとに積和を計算する処理に適している．
+ニューラルネットワークの全結合層$y_i = b_i + \sum_j W_{ij} x_j$は次のように計算できる．
+
+\begin{lstlisting}[language=C, basicstyle=\ttfamily\small, frame=single]
+for (int i = 0; i < rows; i++) {
+  float sum = bias[i];
+  for (int k = row_ptr[i]; k < row_ptr[i + 1]; k++) {
+    sum += val[k] * x[col[k]];
+  }
+  y[i] = sum;
+}
+\end{lstlisting}
+
+\subsubsection{LIL（List of Lists）形式}
+
+LIL形式とは，行ごとに非ゼロ成分の列番号のリストと値のリストを持つ形式である\cite{SciPy}．
+行列$A$の場合表\ref{tab:lil}のようになる．
+
+\begin{table}[h]
+  \centering
+  \caption{LIL形式による$A$の表現}
+  \label{tab:lil}
+  \begin{tabular}{lcc}
+    \toprule
+    行 & 列番号のリスト & 値のリスト \\
+    \midrule
+    0 & [0, 3] & [5, 2] \\
+    1 & [\,]   & [\,]   \\
+    2 & [1, 3] & [3, 1] \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+要素の追加や削除がしやすく，疎行列を少しずつ組み立てるのに適する一方，行列ベクトル積などの演算は遅いという特徴をもつ．
+
+\subsubsection{3形式の比較}
+
+表\ref{tab:compare}に3形式の比較を示す．
+
+\begin{table}[h]
+  \centering
+  \caption{COO・CSR・LIL形式の比較}
+  \label{tab:compare}
+  \small
+  \begin{tabular}{p{0.08\linewidth}p{0.26\linewidth}p{0.24\linewidth}p{0.24\linewidth}}
+    \toprule
+    形式 & 位置情報の持ち方 & 長所 & 短所 \\
+    \midrule
+    COO & 非ゼロごとに(行, 列) & 単純で作りやすい & サイズが大きい \\
+    CSR & 列番号と行の開始位置 & 小さくて行方向の演算が速い & 要素の追加が難しい \\
+    LIL & 行ごとのリスト & 組み立て・変更が容易 & 演算が遅く，行ごとの管理領域が必要 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+ニューラルネットで用いる学習データは一度だけ書き出す固定データであり，実行中に要素を追加・削除する必要がない．
+また，推論では行ごとの積和を計算する．
+したがって，サイズが小さく行方向の演算に適したCSR形式を用いる．
+
+\section{実験方法}
+
+\subsection{実験の流れ}
+
+本実験では，疎行列をCSR形式で圧縮し圧縮しない場合と比較してメモリ使用量，推論品質，推論時間への影響を調べる．
+実験は次の手順で行う．
+
+\begin{enumerate}
+  \item Pythonで隠れ層の次元$H$を変えながらニューラルネットワークを学習させる．
+  \item 学習データの重み（weight）のうち，絶対値がしきい値$\theta$未満の成分を0とする．
+  \item 疎行列をCSR形式で変換したものをArduino用のヘッダファイルとして出力し，カラーチャートを読み取り，MSEを測定し，圧縮なしの場合と比較する．
+\end{enumerate}
+
+\subsection{プログラムの実装}
+
+\subsubsection{しきい値処理とCSR形式への変換}
+
+学習データの疎行列$W$（行が出力側，列が入力側）に，次のしきい値処理を行う．
+\begin{equation}
+  W'_{ij} =
+  \begin{cases}
+    W_{ij} & (|W_{ij}| \geq \theta) \\
+    0      & (|W_{ij}| < \theta)
+  \end{cases}
+\end{equation}
+しきい値$\theta$は重みの絶対値の分布を確認したうえで，
+$\theta$を変えたときの出力の変化が小さくなる範囲から選ぶ．
+
+しきい値処理した行列をCSR形式に変換し，Arduino用のヘッダファイルに書き出す．
+値\texttt{val}は\texttt{float}，列番号\texttt{col}は\texttt{uint8\_t}，行の開始位置\texttt{row\_ptr}は\texttt{uint16\_t}とする．
+
+\begin{lstlisting}[language=Python, basicstyle=\ttfamily\small, frame=single]
+import numpy as np
+from scipy.sparse import csr_matrix
+
+def to_csr_header(W, name, th):
+    W = np.where(np.abs(W) >= th, W, 0.0)
+    m = csr_matrix(W)
+    val = ", ".join(f"{v:.8g}" for v in m.data)
+    col = ", ".join(str(c) for c in m.indices)
+    ptr = ", ".join(str(p) for p in m.indptr)
+    return (f"const float {name}_val[] = {{{val}}};\n"
+            f"const uint8_t {name}_col[] = {{{col}}};\n"
+            f"const uint16_t {name}_ptr[] = {{{ptr}}};\n")
+
+th = 0.01
+layers = [m for m in model.model if isinstance(m, torch.nn.Linear)]
+with open("model_parameters_csr.h", "w") as f:
+    f.write("#include <stdint.h>\n")
+    for i, layer in enumerate(layers, 1):
+        W = layer.weight.detach().numpy()
+        b = layer.bias.detach().numpy()
+        f.write(to_csr_header(W, f"w{i}", th))
+        f.write("const float bias_%d[] = {%s};\n"
+                % (i, ", ".join(f"{v:.8g}" for v in b)))
+\end{lstlisting}
+
+配列には\texttt{const}を付け，フラッシュメモリに配置されるようにする．
+公平に比較するため，圧縮しない場合の重み配列にも同じく\texttt{const}を付ける．
+
+\subsection{性能確認方法}
+
+\subsubsection{比較する条件}
+
+表\ref{tab:cond}の条件で実験を行う．
+
+\begin{table}[h]
+  \centering
+  \caption{実験条件}
+  \label{tab:cond}
+  \begin{tabular}{ll}
+    \toprule
+    項目 & 設定 \\
+    \midrule
+    隠れ層の次元$H$ & 40，60，100，200 \\
+    重みデータの形式 & 圧縮なし（\texttt{float}配列），CSR形式 \\
+    しきい値$\theta$ & 0.001，0.005，0.01，0.02（CSR形式のみ） \\
+    L1正則化の係数$\lambda$ & $10^{-6}$（配布されたプログラムの値） \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsubsection{評価項目}
+
+比較評価には，MSEを用いる．
+MSEが圧縮前より小さくなれば，圧縮後の方が推論品質が高いことを意味すると言える．
+
+\begin{thebibliography}{9}
+\bibitem{SciPy} SciPy documentation, scipy.sparse.lil_matrix, https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.lil\_matrix.html
+\bibitem{han2016deep} S. Han, H. Mao, W. J. Dally, "Deep Compression: Compressing Deep Neural Networks with Pruning, Trained Quantization and Huffman Coding," ICLR 2016. arXiv:1510.00149
+\bibitem{copernicus2020} Copernicus: Characterizing the Performance Implications of Compression Formats Used in Sparse Workloads. arXiv:2011.10932
+\end{thebibliography}
+
+\end{document}
