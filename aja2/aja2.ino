@@ -23,7 +23,7 @@ namespace dense {
 #endif
 
 #define INPUT_SIZE 3
-#define HIDDEN_SIZE1 200            // ← 学習時の次元に合わせる
+#define HIDDEN_SIZE1 200           // ← 学習時の次元に合わせる
 #define HIDDEN_SIZE2 200
 #define OUTPUT_SIZE 3
 
@@ -53,9 +53,10 @@ float RGBInput[3]{0, 0, 0};
 float RGBOutputCsr[3]{0, 0, 0};
 float RGBOutputDense[3]{0, 0, 0};
 
-// RGBデータメモリ
+// RGBデータメモリ（N: 行数（高さ），M: 幅×3）
 int N, M;
 float **arrayCsr;
+float **arrayRaw;  // NN 補正前の正規化入力（学習データ用，0-1 のまま保持）
 #if COMPARE_DENSE
 float **arrayDense;
 #endif
@@ -272,6 +273,38 @@ void printPPM(const char *label, float **array) {
     Serial.println();
 }
 
+// NN 補正前の入力を 0-255 にした PPM（目視確認用）
+void printRawPPM() {
+    Serial.println("=== RAW（NN補正前） ===");
+    Serial.println("--------------------------------------------------");
+    Serial.println("P3");
+    Serial.println(String((int)(M/3))+" "+String(N));
+    Serial.println("255");
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < M; j++) {
+            Serial.print((int)min(max(arrayRaw[i][j] * 255, 0), 255));
+            Serial.print(" ");
+        }
+        Serial.println();
+    }
+    Serial.println("--------------------------------------------------");
+    Serial.println();
+}
+
+// 学習ノートブックの X にそのまま貼れる形式（0-1，小数4桁，左上から行順）
+void printTrainingData() {
+    Serial.println("=== TRAIN_X ===");
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < M; j += 3) {
+            Serial.println("[" + String(max(arrayRaw[i][j], 0), 4) + ", "
+                + String(max(arrayRaw[i][j+1], 0), 4) + ", "
+                + String(max(arrayRaw[i][j+2], 0), 4) + "],");
+        }
+    }
+    Serial.println("=== END_TRAIN_X ===");
+    Serial.println();
+}
+
 void setup() {
     Serial.begin(9600);
     pinMode(led_r_pin, OUTPUT);
@@ -289,16 +322,26 @@ void setup() {
 
     Serial.println(String("H=") + HIDDEN_SIZE1 + "  COMPARE_DENSE=" + COMPARE_DENSE
         + "  READ_REPEAT=" + READ_REPEAT + "  SETTLE_DELAY=" + SETTLE_DELAY + "ms");
-    Serial.println("画像の Height（行数）を入力してください: ");
+    // 「3」なら 3x3，「6 4」なら幅6・高さ4（6x4 チャート用）
+    Serial.println("画像の Height（行数）を入力してください（幅が違う場合は「幅 高さ」，例: 6 4）: ");
     while (Serial.available() == 0) {
         // 何もせずに待機
     }
-    N = Serial.parseInt();
-    M = N*3; // RGBの値を入れるために3倍しておく
+    int first = Serial.parseInt();
+    int second = Serial.parseInt();  // 1つしか入力がなければタイムアウト（約1秒）で 0 が返る
+    int width;
+    if (second > 0) { width = first; N = second; }
+    else            { width = first; N = first; }
+    M = width*3; // RGBの値を入れるために3倍しておく
     Serial.println("Height: " + String(N));
-    Serial.println("Width: " + String((int)(M/3)));
+    Serial.println("Width: " + String(width));
 
     arrayCsr = allocateArray(N, M);
+    arrayRaw = allocateArray(N, M);
+    if (arrayRaw == NULL) {
+        Serial.println("配列の確保に失敗");
+        return;
+    }
 #if COMPARE_DENSE
     arrayDense = allocateArray(N, M);
     if (arrayDense == NULL) {
@@ -321,6 +364,7 @@ void loop() {
         readAndProcess();
         for (int c = 0; c < 3; c++) {
             arrayCsr[n][m+c] = RGBOutputCsr[c];
+            arrayRaw[n][m+c] = RGBInput[c];
 #if COMPARE_DENSE
             arrayDense[n][m+c] = RGBOutputDense[c];
 #endif
@@ -339,6 +383,8 @@ void loop() {
 #if COMPARE_DENSE
                 printPPM("圧縮なし（dense）", arrayDense);
 #endif
+                printRawPPM();
+                printTrainingData();
                 // PPM のコピー範囲に混ざらないよう，区切り線の後に出力する
                 Serial.println("[predict 実行時間] H=" + String(HIDDEN_SIZE1));
                 Serial.println("  CSR  : " + timeCsr.summary());
