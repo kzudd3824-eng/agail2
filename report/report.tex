@@ -16,6 +16,7 @@
 \usepackage[most]{tcolorbox}
 \usepackage{pgfplots}
 \pgfplotsset{compat=1.18}
+\usetikzlibrary{positioning, arrows.meta}
 
 \setlist[itemize]{itemsep=0.4em, topsep=0.4em}
 \lstset{basicstyle=\ttfamily\small, frame=single, breaklines=true, columns=fullflexible}
@@ -31,7 +32,7 @@
   \vfill
   {\Large 25G1066\quad 塩野一樹\par}
   \vspace{8mm}
-  {\large 提出日：\today\par}
+  {\large \today\par}
   \vspace{40mm}
 \end{titlepage}
 
@@ -142,7 +143,7 @@ LIL形式とは，行ごとに非ゼロ成分の列番号のリストと値の�
 \subsection{L1正則化による重みの疎化}
 配布された学習プログラムでは，損失関数に重みの絶対値の和を加えるL1正則化が用いられている．
 \begin{equation}
-  L = \frac{1}{n}\sum_{k=1}^{n} \| \boldsymbol{y}_k - f(\boldsymbol{x}_k) \|^2 + \lambda \sum_{l} \sum_{i,j} |W^{(l)}_{ij}|, \qquad \lambda = 10^{-6}
+  L = \frac{1}{3n}\sum_{k=1}^{n} \| \boldsymbol{y}_k - f(\boldsymbol{x}_k) \|^2 + \lambda \sum_{l} \sum_{i,j} |W^{(l)}_{ij}|, \qquad \lambda = 10^{-6}
 \end{equation}
 L1項の勾配は重みの大きさによらず$\lambda\,\mathrm{sign}(W_{ij})$で一定であるため，出力への寄与が小さい重みは0に向かって押し続けられる．
 その結果，学習後の重みには0に近い成分が多く含まれる\cite{han2016deep}．
@@ -157,7 +158,7 @@ L1項の勾配は重みの大きさによらず$\lambda\,\mathrm{sign}(W_{ij})$�
      + \underbrace{2\,\{(H+1) + (H+1) + (3+1)\}}_{\texttt{row\_ptr}} = 5N + 4H + 12 \ \text{[byte]} \label{eq:mcsr}
 \end{align}
 バイアス$4(2H+3)$バイトはどちらの方式でも共通であるため比較から除いた．
-CSR形式の方が小さくなる条件は$5N + 4H + 12 < 4H^2 + 24H$であり，$H=40$では$N < 1{,}468$，すなわち全1{,}840成分の約80\%未満が非ゼロであればよい．
+CSR形式の方が小さくなる条件は$5N + 4H + 12 < 4H^2 + 24H$であり，$H=40$では$N < 1{,}438$，すなわち全1{,}840成分の約78\%未満が非ゼロであればよい．
 逆に，しきい値処理をせずすべての成分を保存すると（$N$=全成分数），1成分あたり5バイトとなりCSR形式の方が約25\%大きくなる．
 
 % =====================================================================
@@ -171,6 +172,8 @@ CSR形式の方が小さくなる条件は$5N + 4H + 12 < 4H^2 + 24H$であり�
 \end{itemize}
 
 \subsection{実験の流れ}
+実験の流れを図\ref{fig:flow}に示す．
+
 \begin{enumerate}
   \item 予備実験の結果をもとに読み取り方法を改善し，学習データ（3$\times$3および6$\times$4チャート，計33色）を取り直す．
   \item 隠れ層の次元$H=40, 60, 100, 200$でニューラルネットワークを学習させる．
@@ -178,6 +181,44 @@ CSR形式の方が小さくなる条件は$5N + 4H + 12 < 4H^2 + 24H$であり�
   \item Arduino上で3$\times$3チャートを読み取り，MSE，推論時間，メモリ使用量を測定する．
   \item 記録した読み取り値を用いて，$\theta$を変えたときの非ゼロ成分数とMSEの変化をPC上で計算する．
 \end{enumerate}
+
+\begin{figure}[tbp]
+  \centering
+  \begin{tikzpicture}[
+      node distance=6mm and 10mm,
+      box/.style={draw, thick, rounded corners=2pt, align=center,
+                   minimum width=62mm, minimum height=10mm, font=\small},
+      pc/.style={box, fill=gray!12},
+      ard/.style={box, fill=white, double, double distance=1pt},
+      res/.style={draw, dashed, align=left, font=\footnotesize, inner sep=4pt},
+      arr/.style={-{Stealth[length=2.5mm]}, thick}
+    ]
+    \node[ard] (s1) {(1) 読み取り方法の改善と学習データの取得\\（3$\times$3・6$\times$4チャート，計33色）};
+    \node[pc,  below=of s1] (s2) {(2) ニューラルネットワークの学習\\（$H=40, 60, 100, 200$，L1正則化）};
+    \node[pc,  below=of s2] (s3) {(3) しきい値処理（$\theta=0.005$）と\\CSR形式のヘッダファイル出力};
+    \node[ard, below=of s3] (s4) {(4) Arduino上で3$\times$3チャートを読み取り};
+    \node[pc,  below=of s4] (s5) {(5) $\theta$を変えたときの評価（PC上）};
+
+    \node[res, right=of s4] (o4) {・MSE\\・推論時間（\texttt{micros()}）\\・メモリ使用量\\・入力値の記録};
+    \node[res, right=of s5] (o5) {・非ゼロ成分数$N$\\・圧縮なしとのMSEの差};
+
+    \draw[arr] (s1) -- (s2);
+    \draw[arr] (s2) -- (s3);
+    \draw[arr] (s3) -- (s4);
+    \draw[arr] (s4) -- (s5);
+    \draw[arr, dashed] (s4) -- (o4);
+    \draw[arr, dashed] (s5) -- (o5);
+    \draw[arr] (s4.west) -- ++(-8mm,0) |- node[pos=0.25, left, font=\footnotesize, align=right]{各$H$で\\繰り返す} (s2.west);
+
+    % 凡例
+    \node[pc,  minimum width=12mm, minimum height=5mm, below left=5mm and -30mm of s5] (lpc) {};
+    \node[right=1mm of lpc, font=\footnotesize] (tpc) {PC上の処理};
+    \node[ard, minimum width=12mm, minimum height=5mm, right=6mm of tpc] (lard) {};
+    \node[right=1mm of lard, font=\footnotesize] {Arduino上の処理};
+  \end{tikzpicture}
+  \caption{実験の流れ}
+  \label{fig:flow}
+\end{figure}
 
 \subsection{予備実験と読み取り方法の改善}
 \label{sec:pre}
