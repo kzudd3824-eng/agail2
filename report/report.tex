@@ -16,7 +16,7 @@
 \usepackage[most]{tcolorbox}
 \usepackage{pgfplots}
 \pgfplotsset{compat=1.18}
-\usetikzlibrary{positioning, arrows.meta}
+\usetikzlibrary{positioning, arrows.meta, shapes.geometric}
 
 \setlist[itemize]{itemsep=0.4em, topsep=0.4em}
 \lstset{basicstyle=\ttfamily\small, frame=single, breaklines=true, columns=fullflexible}
@@ -185,36 +185,40 @@ CSR形式の方が小さくなる条件は$5N + 4H + 12 < 4H^2 + 24H$であり�
 \begin{figure}[tbp]
   \centering
   \begin{tikzpicture}[
-      node distance=6mm and 10mm,
-      box/.style={draw, thick, rounded corners=2pt, align=center,
-                   minimum width=62mm, minimum height=10mm, font=\small},
-      pc/.style={box, fill=gray!12},
-      ard/.style={box, fill=white, double, double distance=1pt},
-      res/.style={draw, dashed, align=left, font=\footnotesize, inner sep=4pt},
-      arr/.style={-{Stealth[length=2.5mm]}, thick}
+      x=1mm, y=1mm,
+      every node/.style={font=\footnotesize, align=center},
+      proc/.style={draw, thick, minimum width=26mm, minimum height=12mm, inner sep=2pt},
+      term/.style={draw, thick, rounded corners=3mm, minimum width=16mm, minimum height=7mm},
+      dec/.style={draw, thick, diamond, aspect=2, inner sep=1pt},
+      arr/.style={-{Stealth[length=2.2mm]}, thick},
+      lbl/.style={font=\scriptsize, inner sep=1.5pt}
     ]
-    \node[ard] (s1) {(1) 読み取り方法の改善と学習データの取得\\（3$\times$3・6$\times$4チャート，計33色）};
-    \node[pc,  below=of s1] (s2) {(2) ニューラルネットワークの学習\\（$H=40, 60, 100, 200$，L1正則化）};
-    \node[pc,  below=of s2] (s3) {(3) しきい値処理（$\theta=0.005$）と\\CSR形式のヘッダファイル出力};
-    \node[ard, below=of s3] (s4) {(4) Arduino上で3$\times$3チャートを読み取り};
-    \node[pc,  below=of s4] (s5) {(5) $\theta$を変えたときの評価（PC上）};
+    % 1段目（左から右）
+    \node[term] (start) at (0,0)   {START};
+    \node[proc] (n1)    at (30,0)  {学習データの取得\\（33色）};
+    \node[proc] (n2)    at (64,0)  {$H$を決めて\\学習（PC）};
+    \node[proc] (n3)    at (98,0)  {しきい値処理と\\CSR変換（PC）};
+    \node[proc] (n4)    at (134,0) {Arduinoで\\チャートを読み取り\\（CSRで推論）};
+    % 2段目（右から左）
+    \node[dec]  (d1)    at (134,-40) {$H \leq 60$か？};
+    \node[proc] (y1)    at (101,-29)  {Arduino上で\\圧縮なしも推論};
+    \node[proc] (no1)   at (101,-51)  {記録した入力で\\圧縮なしを\\PC上で推論};
+    \node[dec]  (d2)    at (62,-40)  {すべての$H$を\\測定したか？};
+    \node[proc, minimum width=22mm] (n5) at (26,-40) {$\theta$を変えて\\PC上で評価};
+    \node[term] (end)   at (0,-40)   {END};
 
-    \node[res, right=of s4] (o4) {・MSE\\・推論時間（\texttt{micros()}）\\・メモリ使用量\\・入力値の記録};
-    \node[res, right=of s5] (o5) {・非ゼロ成分数$N$\\・圧縮なしとのMSEの差};
-
-    \draw[arr] (s1) -- (s2);
-    \draw[arr] (s2) -- (s3);
-    \draw[arr] (s3) -- (s4);
-    \draw[arr] (s4) -- (s5);
-    \draw[arr, dashed] (s4) -- (o4);
-    \draw[arr, dashed] (s5) -- (o5);
-    \draw[arr] (s4.west) -- ++(-8mm,0) |- node[pos=0.25, left, font=\footnotesize, align=right]{各$H$で\\繰り返す} (s2.west);
-
-    % 凡例
-    \node[pc,  minimum width=12mm, minimum height=5mm, below left=5mm and -30mm of s5] (lpc) {};
-    \node[right=1mm of lpc, font=\footnotesize] (tpc) {PC上の処理};
-    \node[ard, minimum width=12mm, minimum height=5mm, right=6mm of tpc] (lard) {};
-    \node[right=1mm of lard, font=\footnotesize] {Arduino上の処理};
+    \draw[arr] (start) -- (n1);
+    \draw[arr] (n1) -- (n2);
+    \draw[arr] (n2) -- (n3);
+    \draw[arr] (n3) -- (n4);
+    \draw[arr] (n4) -- (d1);
+    \draw[arr] (d1.west) -- ++(-4,0) |- node[lbl, pos=0.25, right] {Yes} (y1.east);
+    \draw[arr] (d1.west) -- ++(-4,0) |- node[lbl, pos=0.25, right] {No}  (no1.east);
+    \draw[arr] (y1.west)  -| (82,-40) -- (d2.east);
+    \draw[arr] (no1.west) -| (82,-40) -- (d2.east);
+    \draw[arr] (d2.north) -- node[lbl, right] {No（次の$H$）} (d2.north |- n2.south);
+    \draw[arr] (d2) -- node[lbl, above] {Yes} (n5);
+    \draw[arr] (n5) -- (end);
   \end{tikzpicture}
   \caption{実験の流れ}
   \label{fig:flow}
